@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -127,6 +128,8 @@ func (gi *GitIgnore) ShouldIgnore(path string) bool {
 		".git",
 		".idea",
 		".vscode",
+		".zig-cache",
+		"zig-out",
 		"__pycache__",
 		".pytest_cache",
 		".mypy_cache",
@@ -162,6 +165,100 @@ func (gi *GitIgnore) ShouldIgnore(path string) bool {
 	}
 
 	return false
+}
+
+// TreeNode represents a node in the file tree
+type TreeNode struct {
+	name     string
+	isDir    bool
+	children map[string]*TreeNode
+}
+
+// NewTreeNode creates a new tree node
+func NewTreeNode(name string, isDir bool) *TreeNode {
+	return &TreeNode{
+		name:     name,
+		isDir:    isDir,
+		children: make(map[string]*TreeNode),
+	}
+}
+
+// GenerateTreeView creates a tree view of the directory structure
+func GenerateTreeView(root string) (string, error) {
+	tree := NewTreeNode("", true)
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip .gitignore files
+		if info.Name() == ".gitignore" {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+
+		// Skip root directory
+		if relPath == "." {
+			return nil
+		}
+
+		parts := strings.Split(relPath, string(filepath.Separator))
+		current := tree
+
+		// Build tree structure
+		for i, part := range parts {
+			isLast := i == len(parts)-1
+			if _, exists := current.children[part]; !exists {
+				current.children[part] = NewTreeNode(part, !isLast || info.IsDir())
+			}
+			current = current.children[part]
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Project Structure:\n")
+	printTree(tree, "", true, &sb)
+	return sb.String(), nil
+}
+
+// printTree recursively prints the tree structure
+func printTree(node *TreeNode, prefix string, isLast bool, sb *strings.Builder) {
+	if node.name != "" {
+		sb.WriteString(prefix)
+		if isLast {
+			sb.WriteString("└── ")
+			prefix += "    "
+		} else {
+			sb.WriteString("├── ")
+			prefix += "│   "
+		}
+		sb.WriteString(node.name)
+		sb.WriteString("\n")
+	}
+
+	// Sort children for consistent output
+	children := make([]string, 0, len(node.children))
+	for name := range node.children {
+		children = append(children, name)
+	}
+	sort.Strings(children)
+
+	for i, name := range children {
+		child := node.children[name]
+		isLast := i == len(children)-1
+		printTree(child, prefix, isLast, sb)
+	}
 }
 
 func main() {
@@ -201,11 +298,8 @@ func main() {
 	// Handle output file path - always in current working directory
 	var outfilepath string
 	if *outfile == "" {
-		// Use the base name of input directory for the output file
-		dirname := filepath.Base(absdir)
-		outfilepath = filepath.Join(cwd, dirname+".txt")
+		outfilepath = filepath.Join(cwd, "codepack.txt")
 	} else {
-		// Put the specified output file in current directory
 		outfilepath = filepath.Join(cwd, *outfile)
 	}
 
@@ -222,19 +316,24 @@ func main() {
 		println("Output file:", outfilepath)
 	}
 
-	// Load gitignore patterns
-	gitignore, err := LoadGitIgnore(absdir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Error loading .gitignore: %v\n", err)
-		// Continue without gitignore if there's an error
-	}
-
+	// Create output file
 	f, err := os.Create(outfilepath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
 		os.Exit(1)
 	}
 	defer f.Close()
+
+	// Generate and write tree view
+	treeView, err := GenerateTreeView(absdir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating tree view: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := f.WriteString(treeView + "\n\n"); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing tree view: %v\n", err)
+		os.Exit(1)
+	}
 
 	sb := strings.Builder{}
 	sb.Grow(maxBufferSize)
@@ -244,14 +343,8 @@ func main() {
 			return err
 		}
 
-    // Check if path should be ignored based on gitignore rules
-		if gitignore != nil && gitignore.ShouldIgnore(path) {
-			if *verbose {
-				fmt.Println("Skipping (ignored by gitignore):", path)
-			}
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
+		// Skip .gitignore files
+		if info.Name() == ".gitignore" {
 			return nil
 		}
 
@@ -372,6 +465,7 @@ var FileExtToComment = map[string]CommentStyle{
 	".swift": {Prepend: "//", Append: ""}, // Swift
 	".kt":    {Prepend: "//", Append: ""}, // Kotlin
 	".scala": {Prepend: "//", Append: ""}, // Scala
+	".zig":   {Prepend: "//", Append: ""},
 
 	// Traditional languages
 	".java":   {Prepend: "//", Append: ""}, // Java
