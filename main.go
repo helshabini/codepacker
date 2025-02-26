@@ -187,13 +187,23 @@ func NewTreeNode(name string, isDir bool) *TreeNode {
 func GenerateTreeView(root string) (string, error) {
 	tree := NewTreeNode("", true)
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	// Load gitignore patterns
+	gitignore, err := LoadGitIgnore(root)
+	if err != nil {
+		// Continue without gitignore if there's an error, but don't return the error
+		gitignore = &GitIgnore{patterns: []string{}, baseDir: root}
+	}
+
+	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip .gitignore files
-		if info.Name() == ".gitignore" {
+		// Check if path should be ignored based on gitignore rules
+		if gitignore != nil && gitignore.ShouldIgnore(path) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
