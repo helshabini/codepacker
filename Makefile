@@ -10,7 +10,7 @@ current-version:
 	@echo "Current version: $(LATEST_TAG)"
 
 release: check-git-clean
-	@echo "Please choose: make release [major|minor|patch]"
+	@echo "Please choose: make [major|minor|patch]"
 	@exit 1
 
 major: check-git-clean
